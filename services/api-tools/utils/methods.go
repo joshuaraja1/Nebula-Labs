@@ -1,4 +1,3 @@
-// Package utils provides shared helpers for scraping, parsing, and uploading workflows.
 package utils
 
 import (
@@ -322,11 +321,15 @@ func ConvertFromInterface[T string | float64](value any) *T {
 	return nil
 }
 
+// LinkResult contains the visible text and destination URL extracted from an
+// HTML anchor node.
 type LinkResult struct {
 	Text string
 	Href string
 }
 
+// ExtractTextAndHref extracts the text content and href attribute from each
+// anchor node. It panics when chromedp cannot read a node's text content.
 func ExtractTextAndHref(nodes []*cdp.Node, chromedpCtx context.Context) []LinkResult {
 	output := []LinkResult{}
 	var err error
