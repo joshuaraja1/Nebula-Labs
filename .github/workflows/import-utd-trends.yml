@@ -1,0 +1,39 @@
+name: Import UTD Trends frontend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/import-utd-trends.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Import MIT-licensed UTD Trends history
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git remote add utd-trends https://github.com/UTDNebula/utd-trends.git
+          git fetch utd-trends develop
+          git merge -s ours --no-commit --allow-unrelated-histories utd-trends/develop
+          git read-tree --prefix=apps/utd-trends/ -u utd-trends/develop
+          git commit -m "Import MIT-licensed UTD Trends frontend with upstream history"
+
+      - name: Remove one-time importer and publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/import-utd-trends.yml
+          git commit -m "Remove one-time UTD Trends importer"
+          git push origin main
