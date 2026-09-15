@@ -1,0 +1,158 @@
+diff --git a/rest/schema/scholarship.go b/rest/schema/scholarship.go
+new file mode 100644
+index 0000000..d993878
+--- /dev/null
++++ b/rest/schema/scholarship.go
+@@ -0,0 +1,34 @@
++package schema
++
++// ImmigrationStatus represents a scholarship applicant's immigration category.
++// It is intentionally string-backed because scholarship providers may use
++// different labels while the API preserves a consistent schema.
++type ImmigrationStatus string
++
++// ScholarshipRequirements describes the eligibility criteria for a scholarship.
++type ScholarshipRequirements struct {
++	MatriculationStatus     string            `bson:"matriculation_status" json:"matriculation_status"`
++	ImmigrationStatus      ImmigrationStatus `bson:"immigration_status" json:"immigration_status"`
++	TexasResidencyStatus   string            `bson:"texas_residency_status" json:"texas_residency_status"`
++	CourseLoad             string            `bson:"course_load" json:"course_load"`
++	EligibleClassification string            `bson:"eligible_classification" json:"eligible_classification"`
++	MinGPA                 float64           `bson:"min_gpa" json:"min_gpa"`
++	Schools                []string          `bson:"schools" json:"schools"`
++	Majors                 []string          `bson:"majors" json:"majors"`
++	Concentrations         []string          `bson:"concentrations" json:"concentrations"`
++}
++
++// Scholarship contains the public details, application information, and
++// eligibility requirements for a scholarship opportunity.
++type Scholarship struct {
++	ID                      int                     `bson:"_id" json:"id"`
++	Name                    string                  `bson:"name" json:"name"`
++	Description             string                  `bson:"description" json:"description"`
++	Deadline                string                  `bson:"deadline" json:"deadline"`
++	Term                    string                  `bson:"term" json:"term"`
++	Contact                 string                  `bson:"contact" json:"contact"`
++	ApplicationInstructions string                  `bson:"application_instructions" json:"application_instructions"`
++	ApplicationLink         string                  `bson:"application_link" json:"application_link"`
++	Requirements            ScholarshipRequirements `bson:"requirements" json:"requirements"`
++	Renewal                 string                  `bson:"renewal" json:"renewal"`
++}
+diff --git a/rest/schema/scholarship_test.go b/rest/schema/scholarship_test.go
+new file mode 100644
+index 0000000..9962e61
+--- /dev/null
++++ b/rest/schema/scholarship_test.go
+@@ -0,0 +1,112 @@
++package schema
++
++import (
++	"encoding/json"
++	"reflect"
++	"testing"
++
++	"go.mongodb.org/mongo-driver/bson"
++)
++
++func TestScholarshipJSONSchema(t *testing.T) {
++	scholarship := Scholarship{
++		ID:                      42,
++		Name:                    "Academic Excellence Scholarship",
++		Description:             "Supports students with strong academic performance.",
++		Deadline:                "2027-02-01",
++		Term:                    "Fall 2027",
++		Contact:                 "scholarships@example.edu",
++		ApplicationInstructions: "Submit the online application.",
++		ApplicationLink:         "https://example.edu/apply",
++		Requirements: ScholarshipRequirements{
++			MatriculationStatus:     "degree-seeking",
++			ImmigrationStatus:      ImmigrationStatus("eligible noncitizen"),
++			TexasResidencyStatus:   "resident",
++			CourseLoad:             "full-time",
++			EligibleClassification: "undergraduate",
++			MinGPA:                 3.5,
++			Schools:                []string{"School of Engineering"},
++			Majors:                 []string{"Computer Science"},
++			Concentrations:         []string{"Data Science"},
++		},
++		Renewal: "Renewable for up to four years.",
++	}
++
++	data, err := json.Marshal(scholarship)
++	if err != nil {
++		t.Fatalf("marshal Scholarship: %v", err)
++	}
++
++	var got map[string]any
++	if err := json.Unmarshal(data, &got); err != nil {
++		t.Fatalf("unmarshal Scholarship JSON: %v", err)
++	}
++
++	wantTopLevelKeys := []string{
++		"id", "name", "description", "deadline", "term", "contact",
++		"application_instructions", "application_link", "requirements", "renewal",
++	}
++	for _, key := range wantTopLevelKeys {
++		if _, ok := got[key]; !ok {
++			t.Errorf("missing top-level JSON key %q", key)
++		}
++	}
++
++	requirements, ok := got["requirements"].(map[string]any)
++	if !ok {
++		t.Fatalf("requirements has type %T; want object", got["requirements"])
++	}
++	wantRequirementKeys := []string{
++		"matriculation_status", "immigration_status", "texas_residency_status",
++		"course_load", "eligible_classification", "min_gpa", "schools", "majors",
++		"concentrations",
++	}
++	for _, key := range wantRequirementKeys {
++		if _, ok := requirements[key]; !ok {
++			t.Errorf("missing requirements JSON key %q", key)
++		}
++	}
++	if gotMinGPA := requirements["min_gpa"]; gotMinGPA != 3.5 {
++		t.Errorf("min_gpa = %v; want numeric value 3.5", gotMinGPA)
++	}
++}
++
++func TestScholarshipBSONUsesMongoID(t *testing.T) {
++	data, err := bson.Marshal(Scholarship{ID: 42})
++	if err != nil {
++		t.Fatalf("marshal Scholarship BSON: %v", err)
++	}
++
++	var got map[string]any
++	if err := bson.Unmarshal(data, &got); err != nil {
++		t.Fatalf("unmarshal Scholarship BSON: %v", err)
++	}
++
++	if _, ok := got["_id"]; !ok {
++		t.Error("missing BSON _id field")
++	}
++	if _, ok := got["id"]; ok {
++		t.Error("unexpected BSON id field; want _id")
++	}
++}
++
++func TestScholarshipSlicesRoundTrip(t *testing.T) {
++	want := ScholarshipRequirements{
++		Schools:        []string{"JSOM", "ECS"},
++		Majors:         []string{"Information Technology and Systems"},
++		Concentrations: []string{"Data Science"},
++	}
++
++	data, err := json.Marshal(want)
++	if err != nil {
++		t.Fatalf("marshal ScholarshipRequirements: %v", err)
++	}
++
++	var got ScholarshipRequirements
++	if err := json.Unmarshal(data, &got); err != nil {
++		t.Fatalf("unmarshal ScholarshipRequirements: %v", err)
++	}
++	if !reflect.DeepEqual(got, want) {
++		t.Errorf("round trip = %#v; want %#v", got, want)
++	}
++}
