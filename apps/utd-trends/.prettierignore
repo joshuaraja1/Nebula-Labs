@@ -1,0 +1,10 @@
+.cache
+.husky
+.next
+.vscode
+package.json
+package-lock.json
+public
+styleguide/build
+data
+next-env.d.ts

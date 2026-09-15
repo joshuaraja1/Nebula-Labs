@@ -1,0 +1,163 @@
+'use client';
+
+import { useSharedState } from '@/app/SharedStateProvider';
+import SearchResultsTable from '@/components/search/SearchResultsTable/SearchResultsTable';
+import { getValidAvailabilitySemester } from '@/modules/availability';
+import { calculateGrades } from '@/modules/fetchGrades';
+import { matchSectionTypesFromSectionNumber } from '@/modules/sections';
+import { type SearchResult } from '@/types/SearchQuery';
+import { useSearchParams } from 'next/navigation';
+import React, { use, useMemo } from 'react';
+import { FiltersContext } from './FilterContext';
+
+interface Props {
+  numSearches: number;
+  resultsPromise: Promise<SearchResult[]>;
+}
+
+/**
+ * Returns the left side
+ */
+export default function ClientLeft(props: Props) {
+  const { effectiveTeachingSemester, availableSemesters } = useSharedState();
+
+  const searchParams = useSearchParams();
+
+  //Filtered results
+  const includedResults: SearchResult[] = [];
+  const secondaryIncludedResults: SearchResult[] = [];
+  let unIncludedResults: SearchResult[] = [];
+
+  //Filters
+  const minGPA = searchParams.get('minGPA');
+  const minRating = searchParams.get('minRating');
+  const maxDiff = searchParams.get('maxDiff');
+  const availabilitySemester = getValidAvailabilitySemester(
+    searchParams,
+    availableSemesters,
+  );
+  const availability = availabilitySemester !== null;
+  const semesterForAvailability =
+    availabilitySemester ?? effectiveTeachingSemester;
+
+  const results = use(props.resultsPromise);
+  const semesters = use(FiltersContext).semesters;
+  const chosenSemesters = use(FiltersContext).chosenSemesters;
+  const chosenSectionTypes = use(FiltersContext).chosenSectionTypes;
+  const sectionTypes = use(FiltersContext).sectionTypes;
+  const filteredResults = useMemo(
+    () =>
+      results.filter((result) => {
+        if (
+          typeof minGPA === 'string' &&
+          calculateGrades(result.grades, chosenSemesters, chosenSectionTypes)
+            .gpa < parseFloat(minGPA)
+        )
+          return false;
+
+        // check if this search result should have RMP data
+        if (result.type !== 'course') {
+          if (
+            typeof minRating === 'string' &&
+            result.RMP &&
+            result.RMP.avgRating < parseFloat(minRating)
+          )
+            return false;
+          if (
+            typeof maxDiff === 'string' &&
+            result.RMP &&
+            result.RMP.avgDifficulty < parseFloat(maxDiff)
+          )
+            return false;
+        }
+        return true;
+      }),
+    [results, minGPA, minRating, maxDiff, chosenSemesters, chosenSectionTypes],
+  );
+
+  //Filter results based on gpa, rmp, rmp difficulty, availability, and grade section type
+  const availableResults = filteredResults.filter((result) => {
+    const availableThisSemester = result.sections.some(
+      (section) => section.academic_session.name === semesterForAvailability,
+    );
+    if (availability && !availableThisSemester) return false;
+
+    // for grades - at least one section has been taught with section types
+    const hasChosenSectionTypes = result.grades.some((section) =>
+      section.data.some((s) => chosenSectionTypes.includes(s.type)),
+    );
+    const hasChosenSemester = result.grades.some((s) =>
+      chosenSemesters.includes(s._id),
+    );
+    // only show courses without grades if no semester/section filters are enabled
+    const noSemesterOrSectionFilter =
+      chosenSemesters.length === semesters.length &&
+      chosenSectionTypes.length === sectionTypes.length;
+    if (
+      !availability &&
+      (!hasChosenSemester || !hasChosenSectionTypes) &&
+      !(result.grades.length === 0 && noSemesterOrSectionFilter)
+    )
+      return false;
+    return true;
+  });
+  // for all "available" results, check if section types are available next semester
+  // if not, keep in separate section
+  const sectionTypeFiltering = chosenSectionTypes.length < sectionTypes.length;
+  availableResults.forEach((result) => {
+    const sectionsWithTypeNextSem = result.sections.filter(
+      (section) =>
+        section.academic_session.name === semesterForAvailability &&
+        matchSectionTypesFromSectionNumber(
+          section.section_number,
+          chosenSectionTypes,
+        ),
+    );
+    if (
+      availability &&
+      sectionTypeFiltering &&
+      sectionsWithTypeNextSem.length === 0
+    ) {
+      secondaryIncludedResults.push(result);
+    } else {
+      // if not filtered out by section filters
+      includedResults.push(result);
+    }
+  });
+  // filter results that are not available next semester
+  unIncludedResults = filteredResults.filter((result) => {
+    if (!availability) return false;
+    const availableThisSemester =
+      result.sections.filter(
+        (section) => section.academic_session.name === semesterForAvailability,
+      ).length > 0;
+    if (availability && availableThisSemester) return false;
+
+    const hasChosenSemester = result.grades.some((s) =>
+      chosenSemesters.includes(s._id),
+    );
+    // for grades - at least one section has been taught with section types
+    const hasChosenSectionTypes = result.grades.some((section) =>
+      section.data.some((s) => chosenSectionTypes.includes(s.type)),
+    );
+    // only show courses without grades if no semester/section filters are enabled
+    const noSemesterOrSectionFilter =
+      chosenSemesters.length === semesters.length &&
+      chosenSectionTypes.length === sectionTypes.length;
+    if (
+      (!hasChosenSemester || !hasChosenSectionTypes) &&
+      !(result.grades.length === 0 && noSemesterOrSectionFilter)
+    )
+      return false;
+    return true;
+  });
+
+  return (
+    <SearchResultsTable
+      numSearches={props.numSearches}
+      includedResults={includedResults}
+      secondaryIncludedResults={secondaryIncludedResults}
+      unIncludedResults={unIncludedResults}
+    />
+  );
+}

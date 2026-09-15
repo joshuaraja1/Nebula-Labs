@@ -1,0 +1,108 @@
+/*
+Build the combos table
+*/
+import { writeFileSync } from 'fs';
+import aggregatedData from '../data/aggregated_data.json';
+import {
+  searchQueryEqual,
+  searchQuerySort,
+  type SearchQuery,
+} from '../types/SearchQuery';
+
+export type TableType = { [key: string]: SearchQuery[] };
+
+const table: TableType = {};
+
+function addBlank(prefix: string, number: string) {
+  const courseString = prefix + ' ' + number; //string representation
+  if (!Object.prototype.hasOwnProperty.call(table, courseString)) {
+    table[courseString] = [];
+  }
+}
+
+function addCombo( //variables
+  prefix: string,
+  number: string,
+  profFirst?: string,
+  profLast?: string,
+) {
+  const courseString = prefix + ' ' + number; //string representation
+  const profString = profFirst + ' ' + profLast;
+
+  const courseObject: SearchQuery = { prefix, number }; //searchquery object
+  const profObject: SearchQuery = { profFirst, profLast };
+
+  if (!Object.prototype.hasOwnProperty.call(table, courseString)) {
+    table[courseString] = [profObject]; //add professor to course
+  } else if (
+    table[courseString].findIndex((x) => searchQueryEqual(profObject, x)) === -1
+  ) {
+    table[courseString].push(profObject); //add from query
+  }
+  if (!Object.prototype.hasOwnProperty.call(table, profString)) {
+    table[profString] = [courseObject]; //add course to professor
+  } else if (
+    table[profString].findIndex((x) => searchQueryEqual(courseObject, x)) === -1
+  ) {
+    table[profString].push(courseObject);
+  }
+}
+
+function sortResults(key: string) {
+  if (Object.prototype.hasOwnProperty.call(table, key)) {
+    table[key].sort(searchQuerySort);
+  }
+}
+
+for (let prefixItr = 0; prefixItr < aggregatedData.data.length; prefixItr++) {
+  const prefixData = aggregatedData.data[prefixItr];
+  for (
+    let courseNumberItr = 0;
+    courseNumberItr < prefixData.course_numbers.length;
+    courseNumberItr++
+  ) {
+    const courseNumberData = prefixData.course_numbers[courseNumberItr];
+    addBlank(prefixData.subject_prefix, courseNumberData.course_number);
+    for (
+      let academicSessionItr = 0;
+      academicSessionItr < courseNumberData.academic_sessions.length;
+      academicSessionItr++
+    ) {
+      const academicSessionData =
+        courseNumberData.academic_sessions[academicSessionItr];
+      for (
+        let sectionItr = 0;
+        sectionItr < academicSessionData.sections.length;
+        sectionItr++
+      ) {
+        const sectionData = academicSessionData.sections[sectionItr];
+        for (
+          let professorItr = 0;
+          professorItr < sectionData.professors.length;
+          professorItr++
+        ) {
+          const professorData = sectionData.professors[professorItr];
+          if (
+            'first_name' in professorData && //handle empty professor: {}
+            'last_name' in professorData &&
+            professorData.first_name !== '' && //handle blank name
+            professorData.last_name !== ''
+          ) {
+            addCombo(
+              prefixData.subject_prefix,
+              courseNumberData.course_number,
+              professorData.first_name,
+              professorData.last_name,
+            );
+          }
+        }
+      }
+    }
+  }
+}
+for (const key in table) {
+  sortResults(key);
+}
+
+writeFileSync('src/data/combo_table.json', JSON.stringify(table));
+console.log('Combo table generation done.');

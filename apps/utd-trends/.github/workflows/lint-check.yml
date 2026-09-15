@@ -1,0 +1,32 @@
+name: Lint, Test, and Formatting Check
+
+on: push
+
+jobs:
+  main:
+    name: Run ESLint, Jest, Prettier, and TypeScript
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Next for ESLint and Prettier
+        run: npm install
+
+      - name: Run ESLint
+        run: npm run lint:check
+
+      - name: Run Jest
+        run: npm run test
+
+      - name: Run Prettier
+        run: npm run format:check
+
+      - name: Run TypeScript
+        run: npm run type:check
