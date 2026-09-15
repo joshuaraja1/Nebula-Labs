@@ -40,13 +40,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           (cd services/api-tools && git apply ../../.github/import/api-tools.patch)
           git add services/api-tools
-          git commit -m "Document shared API utility functions"
+          if ! git diff --cached --quiet; then
+            git commit -m "Document shared API utility functions"
+          else
+            echo "API utility documentation is already present; continuing."
+          fi
 
           (cd services/nebula-api && git apply ../../.github/import/nebula-api.patch)
           git add services/nebula-api
-          git commit -m "Add scholarship schema and serialization tests"
+          if ! git diff --cached --quiet; then
+            git commit -m "Add scholarship schema and serialization tests"
+          else
+            echo "Scholarship schema is already present; continuing."
+          fi
 
       - name: Remove bootstrap files and publish
         shell: bash
