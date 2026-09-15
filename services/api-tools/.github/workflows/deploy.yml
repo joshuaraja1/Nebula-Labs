@@ -1,0 +1,85 @@
+# This workflow deploys the repository to run daily on google cloud run
+
+name: Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches: develop
+
+jobs:
+  main:
+    runs-on: ubuntu-latest
+    environment: deployment
+
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+    - id: auth
+      name: Google Cloud Auth
+      uses: google-github-actions/auth@v2
+      with:
+        token_format: access_token
+        workload_identity_provider: projects/762526944259/locations/global/workloadIdentityPools/pool/providers/github-deploy
+        service_account: 'github-deploy@api-tools-451421.iam.gserviceaccount.com'
+
+    - name: Set up Google Cloud
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Login to Artifact Registry
+      uses: docker/login-action@v3
+      with:
+        registry: us-central1-docker.pkg.dev
+        username: oauth2accesstoken
+        password: ${{ steps.auth.outputs.access_token }}
+
+    - name: Build Docker image
+      uses: docker/build-push-action@v6
+      with:
+        push: true 
+        tags: us-central1-docker.pkg.dev/api-tools-451421/runners/runner
+        target: base
+
+    - name: Upload to daily dev job
+      uses: google-github-actions/deploy-cloudrun@v2
+      with:
+        job: 'daily-dev'
+        image: 'us-central1-docker.pkg.dev/api-tools-451421/runners/runner'
+        region: us-central1
+
+    - name: Upload to daily prod job
+      uses: google-github-actions/deploy-cloudrun@v2
+      with:
+        job: 'daily-prod'
+        image: 'us-central1-docker.pkg.dev/api-tools-451421/runners/runner'
+        region: us-central1
+
+    - name: Upload to weekly dev job
+      uses: google-github-actions/deploy-cloudrun@v2
+      with:
+        job: 'weekly-dev'
+        image: 'us-central1-docker.pkg.dev/api-tools-451421/runners/runner'
+        region: us-central1
+
+    - name: Upload to weekly prod job
+      uses: google-github-actions/deploy-cloudrun@v2
+      with:
+        job: 'weekly-prod'
+        image: 'us-central1-docker.pkg.dev/api-tools-451421/runners/runner'
+        region: us-central1
+    
+    - name: Upload to monthly dev job
+      uses: google-github-actions/deploy-cloudrun@v2
+      with:
+        job: 'monthly-dev'
+        image: 'us-central1-docker.pkg.dev/api-tools-451421/runners/runner'
+        region: us-central1
+
+    - name: Upload to monthly prod job
+      uses: google-github-actions/deploy-cloudrun@v2
+      with:
+        job: 'monthly-prod'
+        image: 'us-central1-docker.pkg.dev/api-tools-451421/runners/runner'
+        region: us-central1

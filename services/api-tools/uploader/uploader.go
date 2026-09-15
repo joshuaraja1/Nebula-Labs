@@ -1,0 +1,275 @@
+// Package uploader writes parsed datasets and derived aggregations into MongoDB collections.
+package uploader
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+	"strings"
+
+	"time"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+
+	"github.com/UTDNebula/api-tools/uploader/pipelines"
+	"github.com/UTDNebula/nebula-api/api/schema"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+)
+
+//  It's important to note that all of the files must be updated/uploaded TOGETHER!
+//  This is because the parser links all of the data together with ObjectID references, and
+//  these references will change and cause things to break if files are updated/uploaded individually!
+
+//  Also note that this uploader assumes that the collection names match the names of these files, which they should.
+//  If the names of these collections ever change, the file names should be updated accordingly.
+
+var filesToUpload [3]string = [3]string{"courses.json", "professors.json", "sections.json"}
+
+// Wrapped for testability - can be replaced with mock in unit tests
+var connectDBFunc = func() *mongo.Client {
+	return connectDB()
+}
+
+// Upload sends parsed JSON files to MongoDB and refreshes static aggregations.
+func Upload(inDir string, replace bool, staticOnly bool) {
+	//Connect to mongo
+	client := connectDBFunc()
+
+	// Get 5 minute context
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	if !staticOnly {
+		for _, path := range filesToUpload {
+
+			// Open data file for reading
+			fptr, err := os.Open(fmt.Sprintf("%s/"+path, inDir))
+			if err != nil {
+				log.Panic(err)
+			}
+
+			defer fptr.Close()
+
+			switch path {
+			case "courses.json":
+				UploadData[schema.Course](client, ctx, fptr, replace)
+			case "professors.json":
+				UploadData[schema.Professor](client, ctx, fptr, replace)
+			case "sections.json":
+				UploadData[schema.Section](client, ctx, fptr, replace)
+			}
+		}
+	}
+
+	// Now that we've uploaded the base files, we can build our static aggregations
+	log.Print("Building static aggregations...")
+
+	buildStaticAggregation(client, ctx, "sections", "events", pipelines.EventsPipeline)
+	buildStaticAggregation(client, ctx, "courses", "trends_course_sections", pipelines.TrendsCourseSectionsPipeline)
+	buildStaticAggregation(client, ctx, "professors", "trends_prof_sections", pipelines.TrendsProfSectionsPipeline)
+	buildStaticAggregation(client, ctx, "courses", "trends_course_and_prof_sections", pipelines.TrendsCombinedSectionsPipeline)
+
+	log.Print("Done building static aggregations!")
+}
+
+// UploadData uploads parsed JSON documents to a MongoDB collection.
+// Make sure the file name matches the collection name (e.g., courses.json for the courses collection).
+func UploadData[T any](client *mongo.Client, ctx context.Context, fptr *os.File, replace bool) {
+	fileName := fptr.Name()[strings.LastIndex(fptr.Name(), "/")+1 : len(fptr.Name())-5]
+	log.Println("Uploading " + fileName + ".json ...")
+
+	// Decode documents from file
+	var docs []T
+	decoder := json.NewDecoder(fptr)
+	err := decoder.Decode(&docs)
+	if err != nil {
+		log.Panic(err)
+	}
+
+	if replace {
+
+		// Get collection
+		collection := getCollection(client, fileName)
+
+		// If we inserted discounts, text-index the collection so we can search for keywords
+		if fileName == "discounts" {
+			/*
+				// If the search indexes have been created, don't create again
+				// TODO: Find a way to dynamically avoid creating one when is has been created
+				_, err = collection.SearchIndexes().CreateOne(ctx, mongo.SearchIndexModel{
+					Definition: bson.D{
+						{Key: "mappings", Value: bson.D{
+							{Key: "dynamic", Value: true},
+							{Key: "fields", Value: bson.D{
+								{Key: "category", Value: bson.D{{Key: "type", Value: "string"}}},
+								{Key: "business", Value: bson.D{{Key: "type", Value: "string"}}},
+								{Key: "address", Value: bson.D{{Key: "type", Value: "string"}}},
+								{Key: "discount", Value: bson.D{{Key: "type", Value: "string"}}},
+							}},
+						}},
+					},
+					Options: options.SearchIndexes().SetName("discount_searches"),
+				})
+				if err != nil {
+					log.Panic(err)
+				}
+			*/
+		}
+
+		// Delete all documents from collection
+		_, err := collection.DeleteMany(ctx, bson.D{})
+		if err != nil {
+			log.Panic(err)
+		}
+
+		// Convert your documents to []interface{}
+		docsInterface := make([]any, len(docs))
+		for i := range docs {
+			docsInterface[i] = docs[i]
+		}
+
+		// Add all documents decoded from the file into the collection
+		opts := options.InsertMany().SetOrdered(false)
+		_, err = collection.InsertMany(ctx, docsInterface, opts)
+		if err != nil {
+			log.Panic(err)
+		}
+
+		// If we inserted courses, sort them by prefix, number, and catalog year
+		if fileName == "courses" {
+			log.Println("Sorting courses...")
+			cursor, err := collection.Aggregate(ctx, mongo.Pipeline{
+				{
+					{Key: "$sort", Value: bson.D{
+						{Key: "subject_prefix", Value: 1},
+						{Key: "course_number", Value: 1},
+						{Key: "catalog_year", Value: 1},
+					}},
+				},
+			})
+
+			if err != nil {
+				log.Panic(err)
+			}
+
+			defer cursor.Close(ctx)
+
+			_, err = collection.DeleteMany(ctx, bson.D{})
+			if err != nil {
+				log.Panic(err)
+			}
+
+			var sorted []any
+			cursor.All(ctx, &sorted)
+
+			opts := options.InsertMany().SetOrdered(false)
+			_, err = collection.InsertMany(ctx, sorted, opts)
+			if err != nil {
+				log.Panic(err)
+			}
+			log.Println("Done sorting courses!")
+		}
+
+	} else {
+		if fileName != "budgets" {
+			log.Panicf("Uploading without the -replace flag is not currently supported for anything but budgets.")
+		}
+
+		// If a temp collection already exists, drop it
+		tempCollection := getCollection(client, "temp")
+		err = tempCollection.Drop(ctx)
+		if err != nil {
+			log.Panic(err)
+		}
+
+		// Create a temporary collection
+		err := client.Database("combinedDB").CreateCollection(ctx, "temp")
+		if err != nil {
+			log.Panic(err)
+		}
+
+		// Get the temporary collection
+		tempCollection = getCollection(client, "temp")
+
+		// Convert your documents to []interface{}
+		docsInterface := make([]interface{}, len(docs))
+		for i := range docs {
+			docsInterface[i] = docs[i]
+		}
+
+		// Add all documents decoded from the file into the temporary collection
+		opts := options.InsertMany().SetOrdered(false)
+		_, err = tempCollection.InsertMany(ctx, docsInterface, opts)
+		if err != nil {
+			log.Panic(err)
+		}
+
+		// Create a merge aggregate pipeline
+		// Matched documents from the temporary collection will replace matched documents from the Mongo collection
+		// Unmatched documents from the temporary collection will be inserted into the Mongo collection
+		var matchFilters []string
+		switch fileName {
+		case "courses":
+			matchFilters = []string{"catalog_year", "course_number", "subject_prefix"}
+		case "professors":
+			matchFilters = []string{"first_name", "last_name"}
+		case "sections":
+			matchFilters = []string{"section_number", "course_reference", "academic_session"}
+		case "budgets":
+			matchFilters = []string{"_id"}
+		default:
+			log.Panic("Unrecognizable filename: " + fileName)
+		}
+
+		// The documents will be added/merged into the collection with the same name as the file
+		// The filters for the merge aggregate pipeline are based on the file name
+		mergeStage := bson.D{primitive.E{Key: "$merge", Value: bson.D{primitive.E{Key: "into", Value: fileName}, primitive.E{Key: "on", Value: matchFilters}, primitive.E{Key: "whenMatched", Value: "replace"}, primitive.E{Key: "whenNotMatched", Value: "insert"}}}}
+
+		// Execute aggregate pipeline
+		_, err = tempCollection.Aggregate(ctx, mongo.Pipeline{mergeStage})
+		if err != nil {
+			log.Panic(err)
+		}
+
+		// Drop the temporary collection
+		err = tempCollection.Drop(ctx)
+		if err != nil {
+			log.Panic(err)
+		}
+	}
+
+	log.Println("Done uploading " + fileName + ".json!")
+
+	defer fptr.Close()
+}
+
+// MongoDB aggregation pipeline run only on upload, instead of as a view where it's run for each query
+func buildStaticAggregation(client *mongo.Client, ctx context.Context, collectionToAggregate string, outputCollection string, pipeline mongo.Pipeline) {
+	toAggregate := getCollection(client, collectionToAggregate)
+	// Aggregate with disk use allowed since our pipelines could hit the in-memory aggregation limit
+	cursor, err := toAggregate.Aggregate(ctx, pipeline, options.Aggregate().SetAllowDiskUse(true))
+	if err != nil {
+		log.Panic(err)
+	}
+	defer cursor.Close(ctx)
+
+	output := getCollection(client, outputCollection)
+	var results []any
+	if err := cursor.All(ctx, &results); err != nil {
+		log.Panic(err)
+	}
+
+	if len(results) > 0 {
+		output.DeleteMany(ctx, bson.D{})
+		_, err = output.InsertMany(ctx, results)
+		if err != nil {
+			log.Panic(err)
+		}
+	}
+
+	log.Printf("Done aggregating %s!", outputCollection)
+}
