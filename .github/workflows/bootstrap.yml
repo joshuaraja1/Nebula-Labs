@@ -1,0 +1,57 @@
+name: Bootstrap standalone repository
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/bootstrap.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Import licensed upstream histories
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git remote add api-tools https://github.com/UTDNebula/api-tools.git
+          git fetch api-tools develop
+          git merge -s ours --no-commit --allow-unrelated-histories api-tools/develop
+          git read-tree --prefix=services/api-tools/ -u api-tools/develop
+          git commit -m "Import MIT-licensed api-tools with upstream history"
+
+          git remote add nebula-api https://github.com/UTDNebula/nebula-api.git
+          git fetch nebula-api develop
+          git merge -s ours --no-commit --allow-unrelated-histories nebula-api/develop
+          git read-tree --prefix=services/nebula-api/ -u nebula-api/develop
+          git commit -m "Import MIT-licensed nebula-api with upstream history"
+
+      - name: Apply independent additions
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd services/api-tools && git apply ../../.github/import/api-tools.patch)
+          git add services/api-tools
+          git commit -m "Document shared API utility functions"
+
+          (cd services/nebula-api && git apply ../../.github/import/nebula-api.patch)
+          git add services/nebula-api
+          git commit -m "Add scholarship schema and serialization tests"
+
+      - name: Remove bootstrap files and publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm -r .github/import .github/workflows/bootstrap.yml
+          git commit -m "Remove one-time bootstrap files"
+          git push origin main
